@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>비행기 점프 게임</title>
+    <style>
+        body {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            margin: 0;
+            background-color: #000; /* 검은색 배경 */
+            color: #fff; /* 흰색 텍스트 */
+            font-family: monospace, sans-serif; /* 픽셀 느낌을 위한 폰트 */
+            overflow: hidden; /* 스크롤 방지 */
+            user-select: none;
+        }
+
+        #gameCanvas {
+            border: 4px solid #fff; /* 캔버스 테두리 */
+            background-color: #000;
+            cursor: pointer;
+            box-shadow: 0 0 20px rgba(255, 255, 255, 0.5); /* 빛나는 효과 */
+        }
+
+        .game-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+        }
+
+        .instructions {
+            margin-top: 15px;
+            font-size: 1.1rem;
+            text-align: center;
+            color: #ccc;
+        }
+    </style>
+</head>
+<body>
+
+<div class="game-container">
+    <canvas id="gameCanvas" width="800" height="400"></canvas>
+    <div class="instructions">
+        스페이스바 또는 화면을 클릭하여 점프하세요!
+    </div>
+</div>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+
+    // =========================================================
+    // 1. 게임 상수 및 변수 초기화
+    // =========================================================
+
+    const GAME_WIDTH = canvas.width;
+    const GAME_HEIGHT = canvas.height;
+    const GRAVITY = 1.0;
+    const JUMP_VELOCITY = -20; // 점프력 향상 (-17 -> -20)
+    const GROUND_LEVEL = GAME_HEIGHT - 40;
+    const GROUND_HEIGHT = 40;
+    const SCROLL_SPEED = 8; // 속도
+
+    let isPlaying = false;
+    let score = 0;
+    let highScore = 0;
+    let frame = 0;
+    let obstacles = [];
+    let obstacleSpawnRate = 120; // 120프레임마다 장애물 생성 (약 2초)
+
+    // 비행기 상태
+    const plane = {
+        x: 50,
+        y: GROUND_LEVEL - 30,
+        width: 60, // 비행기 너비
+        height: 30,
+        velocityY: 0,
+        isJumping: false
+    };
+
+    // =========================================================
+    // 2. 장애물 생성 클래스 (빌딩)
+    // =========================================================
+
+    class Building {
+        constructor(x, height, width) {
+            this.x = x;
+            this.width = width;
+            this.height = height;
+            this.y = GROUND_LEVEL - height;
+        }
+
+        draw() {
+            ctx.fillStyle = '#fff';
+            ctx.fillRect(this.x, this.y, this.width, this.height);
+            // 창문 디테일 (픽셀 느낌)
+            ctx.fillStyle = '#ccc';
+            const windowSize = 5;
+            const windowGap = 10;
+            for (let r = 0; r < this.height / (windowSize + windowGap); r++) {
+                for (let c = 0; c < this.width / (windowSize + windowGap); c++) {
+                    ctx.fillRect(this.x + 5 + c * (windowSize + windowGap), this.y + 5 + r * (windowSize + windowGap), windowSize, windowSize);
+                }
+            }
+        }
+
+        update() {
+            this.x -= SCROLL_SPEED;
+            this.draw();
+        }
+    }
+
+    // =========================================================
+    // 3. 드로잉 함수
+    // =========================================================
+
+    function drawGround() {
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(0, GROUND_LEVEL, GAME_WIDTH, GROUND_HEIGHT);
+    }
+
+    function drawPlane() {
+        ctx.fillStyle = '#fff';
+
+        // 픽셀 아트 비행기 디자인
+        // 몸체 (Fuselage)
+        ctx.fillRect(plane.x, plane.y + 5, plane.width, plane.height - 10);
+
+        // 꼬리 (Tail)
+        ctx.fillRect(plane.x - 10, plane.y + 10, 15, 10); // 수평 꼬리
+        ctx.fillRect(plane.x, plane.y, 5, 10); // 수직 꼬리 위
+
+        // 주 날개 (Main Wing)
+        ctx.fillRect(plane.x + 10, plane.y + plane.height - 5, plane.width - 20, 5); // 아래 날개
+        ctx.fillRect(plane.x + 10, plane.y + 5, plane.width - 20, 5); // 위 날개 (얇게)
+
+        // 조종석 (Cockpit)
+        ctx.fillStyle = '#ccc'; // 캐노피 색상
+        ctx.fillRect(plane.x + plane.width - 20, plane.y + 7, 15, 10);
+
+        // 프로펠러/제트 엔진 (앞부분)
+        ctx.fillStyle = '#fff';
+        ctx.fillRect(plane.x + plane.width - 5, plane.y + plane.height / 2 - 2, 5, 4); // 앞쪽 디테일
+
+        ctx.fillStyle = '#000'; // 눈 (검은색)
+        ctx.fillRect(plane.x + plane.width - 15, plane.y + 10, 3, 3);
+    }
+
+    function drawScore() {
+        ctx.fillStyle = '#fff';
+        ctx.font = '24px monospace';
+        ctx.textAlign = 'right';
+        ctx.fillText(`SCORE: ${score}`, GAME_WIDTH - 20, 30);
+        ctx.fillText(`HIGH: ${highScore}`, GAME_WIDTH - 20, 60);
+    }
+
+    function drawGameOver() {
+        ctx.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        ctx.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+        ctx.fillStyle = '#fff';
+        ctx.font = '48px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText('GAME OVER', GAME_WIDTH / 2, GAME_HEIGHT / 2 - 30);
+
+        ctx.font = '24px monospace';
+        ctx.fillText(`FINAL SCORE: ${score}`, GAME_WIDTH / 2, GAME_HEIGHT / 2 + 10);
+        ctx.fillText('PRESS SPACE OR CLICK TO RESTART', GAME_WIDTH / 2, GAME_HEIGHT / 2 + 60);
+    }
+
+    // =========================================================
+    // 4. 게임 로직 함수
+    // =========================================================
+
+    function resetGame() {
+        if (score > highScore) {
+            highScore = score;
+        }
+
+        score = 0;
+        frame = 0;
+        obstacles = [];
+        plane.y = GROUND_LEVEL - plane.height;
+        plane.velocityY = 0;
+        plane.isJumping = false;
+        isPlaying = true;
+    }
+
+    function jump() {
+        if (!plane.isJumping && isPlaying) {
+            plane.isJumping = true;
+            plane.velocityY = JUMP_VELOCITY;
+        } else if (!isPlaying) {
+            resetGame();
+        }
+    }
+
+    function updatePlane() {
+        plane.velocityY += GRAVITY;
+        plane.y += plane.velocityY;
+
+        if (plane.y >= GROUND_LEVEL - plane.height) {
+            plane.y = GROUND_LEVEL - plane.height;
+            plane.velocityY = 0;
+            plane.isJumping = false;
+        }
+    }
+
+    function updateObstacles() {
+        obstacles.forEach((obstacle, index) => {
+            obstacle.update();
+            if (obstacle.x + obstacle.width < 0) {
+                obstacles.splice(index, 1);
+            }
+        });
+    }
+
+    function spawnObstacle() {
+        if (frame % obstacleSpawnRate === 0) {
+            // 빌딩 1
+            const height1 = Math.floor(Math.random() * 50) + 50; // 50 ~ 99
+            const width1 = Math.floor(Math.random() * 20) + 30; // 30 ~ 49
+            const obstacle1 = new Building(GAME_WIDTH, height1, width1);
+            obstacles.push(obstacle1);
+
+            // 빌딩 2: 빌딩 1 뒤에 간격(20px)을 두고 생성
+            const separationGap = 20; 
+            const height2 = Math.floor(Math.random() * 40) + 40; // 40 ~ 79
+            const width2 = Math.floor(Math.random() * 20) + 20; // 20 ~ 39
+
+            // 빌딩 2의 X 좌표: (캔버스 끝) + (빌딩 1 너비) + (간격)
+            const obstacle2 = new Building(GAME_WIDTH + width1 + separationGap, height2, width2);
+            obstacles.push(obstacle2);
+        }
+
+        // 난이도 증가 (점수에 따라 장애물 생성 속도 증가)
+        if (frame % 500 === 0 && obstacleSpawnRate > 60) {
+            obstacleSpawnRate -= 5;
+        }
+    }
+
+    function checkCollision() {
+        const planeBox = {
+            x: plane.x,
+            y: plane.y,
+            w: plane.width,
+            h: plane.height
+        };
+
+        for (const obstacle of obstacles) {
+            const obsBox = {
+                x: obstacle.x,
+                y: obstacle.y,
+                w: obstacle.width,
+                h: obstacle.height
+            };
+
+            if (planeBox.x < obsBox.x + obsBox.w &&
+                planeBox.x + planeBox.w > obsBox.x &&
+                planeBox.y < obsBox.y + obsBox.h &&
+                planeBox.y + planeBox.h > obsBox.y) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    // =========================================================
+    // 5. 메인 게임 루프
+    // =========================================================
+
+    function gameLoop() {
+        ctx.clearRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
+
+        if (isPlaying) {
+            updatePlane();
+            updateObstacles();
+            spawnObstacle();
+
+            if (checkCollision()) {
+                isPlaying = false;
+                if (score > highScore) {
+                    highScore = score;
+                }
+            }
+
+            score = Math.floor(frame / 10);
+            frame++;
+
+            drawGround();
+            drawPlane();
+            drawScore();
+
+        } else {
+            drawGround();
+            drawPlane();
+            obstacles.forEach(obstacle => obstacle.draw());
+            drawScore();
+            drawGameOver();
+        }
+
+        requestAnimationFrame(gameLoop);
+    }
+
+    // =========================================================
+    // 6. 이벤트 리스너 (입력)
+    // =========================================================
+
+    document.addEventListener('keydown', (e) => {
+        if (e.code === 'Space') {
+            e.preventDefault();
+            jump();
+        }
+    });
+
+    canvas.addEventListener('click', () => {
+        jump();
+    });
+
+    // =========================================================
+    // 7. 게임 시작
+    // =========================================================
+
+    resetGame();
+    isPlaying = false;
+    drawGround();
+    drawPlane();
+    drawScore();
+    drawGameOver();
+
+    window.onload = function() {
+        gameLoop();
+    }
+</script>
+</body>
+</html>
